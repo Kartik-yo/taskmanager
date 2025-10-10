@@ -18,5 +18,62 @@ jobs:
 
     steps:
       - name: Checkout Code
+        uses: actions/checkout@v2
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '21.6.1'
+
+      - name: Install Dependencies
+        run: npm install --force
+
+      - name: Build Application
         run: |
-          echo "this works"
+          npm run build
+          if [ ! -f "dist/main.js" ]; then
+            echo "Build failed: dist/main.js not found"
+            exit 1
+          fi
+
+      - name: Copy .env and Inject Docker Image Version
+        run: |
+          cp ./devops/client/.env development.env
+          if grep -q "^DOCKER_IMAGE_URI_VERSION=" development.env; then
+            sed -i "s/^DOCKER_IMAGE_URI_VERSION=.*/DOCKER_IMAGE_URI_VERSION=${{ github.event.inputs.docker_image_version }}/" development.env
+          else
+            echo "DOCKER_IMAGE_URI_VERSION=${{ github.event.inputs.docker_image_version }}" >> development.env
+          fi
+
+      - name: Archive Artifacts
+        run: |
+          tar -czf static-files.tar.gz dist public package.json development.env
+
+      - name: Install sshpass
+        run: sudo apt-get install -y sshpass
+
+      - name: Upload to Client Server
+        run: |
+          sshpass -p "${{ secrets.SSH_PASSWORD }}" scp -o StrictHostKeyChecking=no static-files.tar.gz \
+            ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:/root/hire-client/${{ github.event.inputs.client_domain }}/backend/
+
+      - name: Remote Deploy via SSH
+        run: |
+          sshpass -p "${{ secrets.SSH_PASSWORD }}" ssh -o StrictHostKeyChecking=no \
+            ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} << 'EOF'
+          set -e
+          cd /root/hire-client/${{ github.event.inputs.client_domain }}/backend/
+          timestamp=$(date +'%Y%m%d%H%M%S')
+          mkdir -p backup
+          [ -d dist ] && mv dist "backup/dist_$timestamp"
+          [ -d public ] && mv public "backup/public_$timestamp"
+          [ -f environment/development.env ] && cp environment/development.env "backup/development_$timestamp.env"
+          tar -xzf static-files.tar.gz
+          rm static-files.tar.gz
+          mkdir -p environment
+          mv development.env environment/development.env
+          npm install --force
+          pm2 stop ${{ github.event.inputs.client_domain }}-backend || true
+          pm2 start dist/main.js --name ${{ github.event.inputs.client_domain }}-backend --max-restarts 5 --update-env
+          pm2 save
+          EOF
