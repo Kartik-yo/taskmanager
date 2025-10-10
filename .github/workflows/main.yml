@@ -1,0 +1,22 @@
+name: Hire-client-backend-pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      client_domain:
+        description: 'Enter your client domain'
+        required: true
+      docker_image_version:
+        description: 'Docker image version'
+        required: true
+
+run-name: Deploy backend for client: ${{ github.event.inputs.client_domain }}
+
+jobs:
+  build_and_deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        run: |
+          echo "this works"
